@@ -1,0 +1,8 @@
+{
+  "appId": "com.schoolms.app",
+  "appName": "SchoolMS",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true
+  }
+}
