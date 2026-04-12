@@ -26,7 +26,17 @@ export function runMigrations() {
   for (const file of files) {
     if (applied.has(file)) continue;
     const sql = fs.readFileSync(join(migrationsDir, file), 'utf8');
-    db.exec(sql);
+    // Execute statements one at a time so ALTER TABLE failures (duplicate column)
+    // don't abort the whole migration — SQLite doesn't support IF NOT EXISTS on ADD COLUMN.
+    const statements = sql.split(/;\s*\n/).map(s => s.trim()).filter(Boolean);
+    for (const stmt of statements) {
+      try {
+        db.exec(stmt);
+      } catch (e) {
+        if (e.message.includes('duplicate column name')) continue; // already applied
+        throw e;
+      }
+    }
     db.prepare('INSERT INTO _migrations (filename) VALUES (?)').run(file);
     console.log(`[migrate] Applied: ${file}`);
   }

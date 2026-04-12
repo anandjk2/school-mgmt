@@ -5,9 +5,9 @@ import fs from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const dataDir = join(__dirname, '../../data');
-const dbPath = join(dataDir, 'school.db');
+const dbPath = process.env.DB_PATH || join(dataDir, 'school.db');
 
-fs.mkdirSync(dataDir, { recursive: true });
+fs.mkdirSync(dirname(dbPath), { recursive: true });
 
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
