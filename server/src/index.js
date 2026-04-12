@@ -15,7 +15,7 @@ import settingsRouter    from './routes/settings.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 try {
-  runMigrations();
+  await runMigrations();
 } catch (err) {
   console.error('Migration failed:', err);
   process.exit(1);

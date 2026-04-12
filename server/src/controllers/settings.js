@@ -1,4 +1,4 @@
-import db from '../db/connection.js';
+import pool from '../db/connection.js';
 import { ok } from '../utils/response.js';
 
 const ALLOWED_KEYS = [
@@ -6,22 +6,30 @@ const ALLOWED_KEYS = [
   'email', 'website', 'academic_year', 'principal_name',
 ];
 
-export const getAll = (req, res) => {
-  const rows = db.prepare('SELECT key, value FROM settings').all();
-  const obj = Object.fromEntries(rows.map(r => [r.key, r.value]));
-  ok(res, obj);
+export const getAll = async (req, res) => {
+  const result = await pool.query('SELECT key, value FROM settings');
+  ok(res, Object.fromEntries(result.rows.map(r => [r.key, r.value])));
 };
 
-export const updateAll = (req, res) => {
-  const upsert = db.prepare(
-    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-  );
-  const upsertAll = db.transaction((data) => {
+export const updateAll = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
     for (const key of ALLOWED_KEYS) {
-      if (key in data) upsert.run(key, data[key] ?? '');
+      if (key in req.body) {
+        await client.query(
+          'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value',
+          [key, req.body[key] ?? '']
+        );
+      }
     }
-  });
-  upsertAll(req.body);
-  const rows = db.prepare('SELECT key, value FROM settings').all();
-  ok(res, Object.fromEntries(rows.map(r => [r.key, r.value])));
+    await client.query('COMMIT');
+    const result = await pool.query('SELECT key, value FROM settings');
+    ok(res, Object.fromEntries(result.rows.map(r => [r.key, r.value])));
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 };

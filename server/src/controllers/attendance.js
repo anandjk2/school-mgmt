@@ -1,86 +1,100 @@
-import db from '../db/connection.js';
+import pool from '../db/connection.js';
 import { ok, created, noContent, notFound } from '../utils/response.js';
 
-export const list = (req, res) => {
+export const list = async (req, res) => {
   const { class_id, date, student_id, from, to } = req.query;
   let sql = `
-    SELECT a.*, s.first_name, s.last_name, c.name as class_name
+    SELECT a.*, s.first_name, s.last_name, c.name AS class_name
     FROM attendance a
     JOIN students s ON a.student_id = s.id
     JOIN classes c ON a.class_id = c.id
     WHERE 1=1
   `;
   const params = [];
-  if (class_id)   { sql += ' AND a.class_id = ?';   params.push(class_id); }
-  if (student_id) { sql += ' AND a.student_id = ?';  params.push(student_id); }
-  if (date)       { sql += ' AND a.date = ?';         params.push(date); }
-  if (from)       { sql += ' AND a.date >= ?';        params.push(from); }
-  if (to)         { sql += ' AND a.date <= ?';        params.push(to); }
+  let i = 1;
+  if (class_id)   { sql += ` AND a.class_id = $${i++}`;   params.push(class_id); }
+  if (student_id) { sql += ` AND a.student_id = $${i++}`;  params.push(student_id); }
+  if (date)       { sql += ` AND a.date = $${i++}`;         params.push(date); }
+  if (from)       { sql += ` AND a.date >= $${i++}`;        params.push(from); }
+  if (to)         { sql += ` AND a.date <= $${i++}`;        params.push(to); }
   sql += ' ORDER BY a.date DESC, s.last_name';
-  ok(res, db.prepare(sql).all(...params));
+  const result = await pool.query(sql, params);
+  ok(res, result.rows);
 };
 
-export const create = (req, res) => {
+export const create = async (req, res) => {
   const { student_id, class_id, date, status, notes } = req.body;
   try {
-    const result = db.prepare(
-      'INSERT INTO attendance (student_id, class_id, date, status, notes) VALUES (?, ?, ?, ?, ?)'
-    ).run(student_id, class_id, date, status, notes);
-    created(res, db.prepare('SELECT * FROM attendance WHERE id = ?').get(result.lastInsertRowid));
+    const result = await pool.query(
+      'INSERT INTO attendance (student_id, class_id, date, status, notes) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [student_id, class_id, date, status, notes]
+    );
+    created(res, result.rows[0]);
   } catch (e) {
-    if (e.message.includes('UNIQUE')) {
-      db.prepare('UPDATE attendance SET status=?, notes=? WHERE student_id=? AND class_id=? AND date=?')
-        .run(status, notes, student_id, class_id, date);
-      const row = db.prepare('SELECT * FROM attendance WHERE student_id=? AND class_id=? AND date=?')
-        .get(student_id, class_id, date);
-      return ok(res, row);
+    if (e.code === '23505') {
+      const upd = await pool.query(
+        'UPDATE attendance SET status=$1, notes=$2 WHERE student_id=$3 AND class_id=$4 AND date=$5 RETURNING *',
+        [status, notes, student_id, class_id, date]
+      );
+      return ok(res, upd.rows[0]);
     }
     throw e;
   }
 };
 
-export const update = (req, res) => {
-  const row = db.prepare('SELECT * FROM attendance WHERE id = ?').get(req.params.id);
+export const update = async (req, res) => {
+  const check = await pool.query('SELECT * FROM attendance WHERE id = $1', [req.params.id]);
+  const row = check.rows[0];
   if (!row) return notFound(res, 'Attendance record not found');
   const { status, notes } = req.body;
-  db.prepare('UPDATE attendance SET status=?, notes=? WHERE id=?').run(
-    status ?? row.status, notes ?? row.notes, req.params.id
+  const result = await pool.query(
+    'UPDATE attendance SET status=$1, notes=$2 WHERE id=$3 RETURNING *',
+    [status ?? row.status, notes ?? row.notes, req.params.id]
   );
-  ok(res, db.prepare('SELECT * FROM attendance WHERE id = ?').get(req.params.id));
+  ok(res, result.rows[0]);
 };
 
-export const remove = (req, res) => {
-  const row = db.prepare('SELECT * FROM attendance WHERE id = ?').get(req.params.id);
-  if (!row) return notFound(res, 'Attendance record not found');
-  db.prepare('DELETE FROM attendance WHERE id = ?').run(req.params.id);
+export const remove = async (req, res) => {
+  const check = await pool.query('SELECT id FROM attendance WHERE id = $1', [req.params.id]);
+  if (!check.rows[0]) return notFound(res, 'Attendance record not found');
+  await pool.query('DELETE FROM attendance WHERE id = $1', [req.params.id]);
   noContent(res);
 };
 
-export const bulkUpsert = (req, res) => {
+export const bulkUpsert = async (req, res) => {
   const { class_id, date, records } = req.body;
-  const upsert = db.prepare(`
-    INSERT INTO attendance (student_id, class_id, date, status, notes)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(student_id, class_id, date) DO UPDATE SET status=excluded.status, notes=excluded.notes
-  `);
-  const upsertAll = db.transaction((recs) => {
-    for (const r of recs) upsert.run(r.student_id, class_id, date, r.status, r.notes ?? null);
-  });
-  upsertAll(records);
-  ok(res, { class_id, date, count: records.length });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const r of records) {
+      await client.query(`
+        INSERT INTO attendance (student_id, class_id, date, status, notes)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT(student_id, class_id, date) DO UPDATE SET status=EXCLUDED.status, notes=EXCLUDED.notes
+      `, [r.student_id, class_id, date, r.status, r.notes ?? null]);
+    }
+    await client.query('COMMIT');
+    ok(res, { class_id, date, count: records.length });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 };
 
-export const summary = (req, res) => {
+export const summary = async (req, res) => {
   const { student_id, class_id, from, to } = req.query;
-  let sql = 'SELECT status, COUNT(*) as count FROM attendance WHERE 1=1';
+  let sql = 'SELECT status, COUNT(*)::int AS count FROM attendance WHERE 1=1';
   const params = [];
-  if (student_id) { sql += ' AND student_id = ?'; params.push(student_id); }
-  if (class_id)   { sql += ' AND class_id = ?';   params.push(class_id); }
-  if (from)       { sql += ' AND date >= ?';        params.push(from); }
-  if (to)         { sql += ' AND date <= ?';        params.push(to); }
+  let i = 1;
+  if (student_id) { sql += ` AND student_id = $${i++}`; params.push(student_id); }
+  if (class_id)   { sql += ` AND class_id = $${i++}`;   params.push(class_id); }
+  if (from)       { sql += ` AND date >= $${i++}`;        params.push(from); }
+  if (to)         { sql += ` AND date <= $${i++}`;        params.push(to); }
   sql += ' GROUP BY status';
-  const rows = db.prepare(sql).all(...params);
+  const result = await pool.query(sql, params);
   const totals = { present: 0, absent: 0, late: 0, excused: 0, total: 0 };
-  for (const r of rows) { totals[r.status] = r.count; totals.total += r.count; }
+  for (const r of result.rows) { totals[r.status] = r.count; totals.total += r.count; }
   ok(res, totals);
 };

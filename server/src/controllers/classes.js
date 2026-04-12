@@ -1,82 +1,91 @@
-import db from '../db/connection.js';
+import pool from '../db/connection.js';
 import { ok, created, noContent, notFound } from '../utils/response.js';
 
-export const list = (req, res) => {
+export const list = async (req, res) => {
   const { academic_year, grade_level } = req.query;
   let sql = `
-    SELECT c.*, COUNT(sc.id) as student_count
+    SELECT c.*, COUNT(sc.id)::int AS student_count
     FROM classes c LEFT JOIN student_classes sc ON c.id = sc.class_id
     WHERE 1=1
   `;
   const params = [];
-  if (academic_year) { sql += ' AND c.academic_year = ?'; params.push(academic_year); }
-  if (grade_level)   { sql += ' AND c.grade_level = ?';   params.push(grade_level); }
+  let i = 1;
+  if (academic_year) { sql += ` AND c.academic_year = $${i++}`; params.push(academic_year); }
+  if (grade_level)   { sql += ` AND c.grade_level = $${i++}`;   params.push(grade_level); }
   sql += ' GROUP BY c.id ORDER BY c.grade_level, c.name';
-  ok(res, db.prepare(sql).all(...params));
+  const result = await pool.query(sql, params);
+  ok(res, result.rows);
 };
 
-export const getOne = (req, res) => {
-  const cls = db.prepare(`
-    SELECT c.*, COUNT(sc.id) as student_count
+export const getOne = async (req, res) => {
+  const result = await pool.query(`
+    SELECT c.*, COUNT(sc.id)::int AS student_count
     FROM classes c LEFT JOIN student_classes sc ON c.id = sc.class_id
-    WHERE c.id = ? GROUP BY c.id
-  `).get(req.params.id);
-  if (!cls) return notFound(res, 'Class not found');
-  ok(res, cls);
+    WHERE c.id = $1 GROUP BY c.id
+  `, [req.params.id]);
+  if (!result.rows[0]) return notFound(res, 'Class not found');
+  ok(res, result.rows[0]);
 };
 
-export const create = (req, res) => {
+export const create = async (req, res) => {
   const { name, grade_level, section, subject, teacher_name, room_number, academic_year, capacity, fee_amount, billing_frequency } = req.body;
-  const result = db.prepare(`
+  const result = await pool.query(`
     INSERT INTO classes (name, grade_level, section, subject, teacher_name, room_number, academic_year, capacity, fee_amount, billing_frequency)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(name, grade_level, section, subject, teacher_name, room_number, academic_year, capacity || 40, fee_amount ?? null, billing_frequency ?? null);
-  created(res, db.prepare('SELECT * FROM classes WHERE id = ?').get(result.lastInsertRowid));
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    RETURNING *
+  `, [name, grade_level, section, subject, teacher_name, room_number, academic_year,
+      capacity || 40, fee_amount ?? null, billing_frequency ?? null]);
+  created(res, result.rows[0]);
 };
 
-export const update = (req, res) => {
-  const cls = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id);
+export const update = async (req, res) => {
+  const check = await pool.query('SELECT * FROM classes WHERE id = $1', [req.params.id]);
+  const cls = check.rows[0];
   if (!cls) return notFound(res, 'Class not found');
+
   const { name, grade_level, section, subject, teacher_name, room_number, academic_year, capacity, fee_amount, billing_frequency } = req.body;
-  db.prepare(`
-    UPDATE classes SET name=?, grade_level=?, section=?, subject=?, teacher_name=?,
-      room_number=?, academic_year=?, capacity=?, fee_amount=?, billing_frequency=?, updated_at=datetime('now')
-    WHERE id=?
-  `).run(name, grade_level, section, subject, teacher_name, room_number, academic_year, capacity,
-    fee_amount ?? cls.fee_amount, billing_frequency ?? cls.billing_frequency, req.params.id);
-  ok(res, db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id));
+  const result = await pool.query(`
+    UPDATE classes SET name=$1, grade_level=$2, section=$3, subject=$4, teacher_name=$5,
+      room_number=$6, academic_year=$7, capacity=$8, fee_amount=$9, billing_frequency=$10, updated_at=NOW()
+    WHERE id=$11
+    RETURNING *
+  `, [name, grade_level, section, subject, teacher_name, room_number, academic_year, capacity,
+      fee_amount ?? cls.fee_amount, billing_frequency ?? cls.billing_frequency, req.params.id]);
+  ok(res, result.rows[0]);
 };
 
-export const remove = (req, res) => {
-  const cls = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id);
-  if (!cls) return notFound(res, 'Class not found');
-  db.prepare('DELETE FROM classes WHERE id = ?').run(req.params.id);
+export const remove = async (req, res) => {
+  const check = await pool.query('SELECT id FROM classes WHERE id = $1', [req.params.id]);
+  if (!check.rows[0]) return notFound(res, 'Class not found');
+  await pool.query('DELETE FROM classes WHERE id = $1', [req.params.id]);
   noContent(res);
 };
 
-export const getStudents = (req, res) => {
+export const getStudents = async (req, res) => {
   const { active } = req.query;
   let sql = `
-    SELECT s.*, sc.id as assignment_id, sc.enrolled_on as class_enrolled_on,
-           sc.disenrolled_on as class_disenrolled_on
+    SELECT s.*, sc.id AS assignment_id, sc.enrolled_on AS class_enrolled_on,
+           sc.disenrolled_on AS class_disenrolled_on
     FROM students s JOIN student_classes sc ON s.id = sc.student_id
-    WHERE sc.class_id = ?
+    WHERE sc.class_id = $1
   `;
   const params = [req.params.id];
-  if (active === '1') { sql += ' AND sc.disenrolled_on IS NULL'; }
+  if (active === '1') sql += ' AND sc.disenrolled_on IS NULL';
   sql += ' ORDER BY s.last_name, s.first_name';
-  ok(res, db.prepare(sql).all(...params));
+  const result = await pool.query(sql, params);
+  ok(res, result.rows);
 };
 
-export const getAttendance = (req, res) => {
+export const getAttendance = async (req, res) => {
   const { date } = req.query;
   let sql = `
     SELECT a.*, s.first_name, s.last_name
     FROM attendance a JOIN students s ON a.student_id = s.id
-    WHERE a.class_id = ?
+    WHERE a.class_id = $1
   `;
   const params = [req.params.id];
-  if (date) { sql += ' AND a.date = ?'; params.push(date); }
+  if (date) { sql += ' AND a.date = $2'; params.push(date); }
   sql += ' ORDER BY a.date DESC, s.last_name';
-  ok(res, db.prepare(sql).all(...params));
+  const result = await pool.query(sql, params);
+  ok(res, result.rows);
 };

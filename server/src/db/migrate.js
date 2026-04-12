@@ -1,4 +1,4 @@
-import db from './connection.js';
+import pool from './connection.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
@@ -6,18 +6,17 @@ import fs from 'fs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(__dirname, 'migrations');
 
-export function runMigrations() {
-  db.exec(`
+export async function runMigrations() {
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS _migrations (
-      id INTEGER PRIMARY KEY,
-      filename TEXT NOT NULL UNIQUE,
-      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      id         SERIAL PRIMARY KEY,
+      filename   TEXT        NOT NULL UNIQUE,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
 
-  const applied = new Set(
-    db.prepare('SELECT filename FROM _migrations').all().map(r => r.filename)
-  );
+  const { rows } = await pool.query('SELECT filename FROM _migrations');
+  const applied = new Set(rows.map(r => r.filename));
 
   const files = fs.readdirSync(migrationsDir)
     .filter(f => f.endsWith('.sql'))
@@ -26,18 +25,8 @@ export function runMigrations() {
   for (const file of files) {
     if (applied.has(file)) continue;
     const sql = fs.readFileSync(join(migrationsDir, file), 'utf8');
-    // Execute statements one at a time so ALTER TABLE failures (duplicate column)
-    // don't abort the whole migration — SQLite doesn't support IF NOT EXISTS on ADD COLUMN.
-    const statements = sql.split(/;\s*\n/).map(s => s.trim()).filter(Boolean);
-    for (const stmt of statements) {
-      try {
-        db.exec(stmt);
-      } catch (e) {
-        if (e.message.includes('duplicate column name')) continue; // already applied
-        throw e;
-      }
-    }
-    db.prepare('INSERT INTO _migrations (filename) VALUES (?)').run(file);
+    await pool.query(sql);
+    await pool.query('INSERT INTO _migrations (filename) VALUES ($1)', [file]);
     console.log(`[migrate] Applied: ${file}`);
   }
 }
