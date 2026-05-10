@@ -7,7 +7,10 @@ const ALLOWED_KEYS = [
 ];
 
 export const getAll = async (req, res) => {
-  const result = await pool.query('SELECT key, value FROM settings');
+  const result = await pool.query(
+    'SELECT key, value FROM settings WHERE tenant_id = $1',
+    [req.tenantId]
+  );
   ok(res, Object.fromEntries(result.rows.map(r => [r.key, r.value])));
 };
 
@@ -18,13 +21,16 @@ export const updateAll = async (req, res) => {
     for (const key of ALLOWED_KEYS) {
       if (key in req.body) {
         await client.query(
-          'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value',
-          [key, req.body[key] ?? '']
+          'INSERT INTO settings (tenant_id, key, value) VALUES ($1, $2, $3) ON CONFLICT(tenant_id, key) DO UPDATE SET value=EXCLUDED.value',
+          [req.tenantId, key, req.body[key] ?? '']
         );
       }
     }
     await client.query('COMMIT');
-    const result = await pool.query('SELECT key, value FROM settings');
+    const result = await pool.query(
+      'SELECT key, value FROM settings WHERE tenant_id = $1',
+      [req.tenantId]
+    );
     ok(res, Object.fromEntries(result.rows.map(r => [r.key, r.value])));
   } catch (e) {
     await client.query('ROLLBACK');

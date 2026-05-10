@@ -1,0 +1,162 @@
+import { useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { apiFetch } from '../../api/config.js';
+import { ArrowLeft, Plus, Trash2, Users } from 'lucide-react';
+import PasswordInput from '../../components/PasswordInput.jsx';
+
+const fetchTenants = async () => {
+  const r = await apiFetch('/api/v1/admin/tenants');
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error?.message);
+  return j.data;
+};
+
+const fetchUsers = async (tenantId) => {
+  const r = await apiFetch(`/api/v1/admin/tenants/${tenantId}/users`);
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error?.message);
+  return j.data;
+};
+
+const createUser = async ({ tenantId, ...data }) => {
+  const r = await apiFetch(`/api/v1/admin/tenants/${tenantId}/users`, { method: 'POST', body: JSON.stringify(data) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error?.message);
+  return j.data;
+};
+
+const deleteUser = async (userId) => {
+  const r = await apiFetch(`/api/v1/admin/users/${userId}`, { method: 'DELETE' });
+  if (!r.ok) { const j = await r.json(); throw new Error(j.error?.message); }
+};
+
+const BLANK = { email: '', password: '', role: 'admin', first_name: '', last_name: '' };
+
+export default function TenantUsers() {
+  const { id: tenantId } = useParams();
+  const qc = useQueryClient();
+  const { data: tenants = [] } = useQuery({ queryKey: ['admin-tenants'], queryFn: fetchTenants });
+  const tenant = tenants.find((t) => t.id === tenantId);
+  const { data: users = [], isLoading } = useQuery({ queryKey: ['admin-users', tenantId], queryFn: () => fetchUsers(tenantId) });
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(BLANK);
+
+  const field = (key) => ({ value: form[key], onChange: (e) => setForm((f) => ({ ...f, [key]: e.target.value })) });
+
+  const createMutation = useMutation({
+    mutationFn: createUser,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-users', tenantId] }); setShowForm(false); setForm(BLANK); },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteUser,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-users', tenantId] }),
+  });
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white border-b border-gray-200 px-6 py-4">
+        <Link to="/admin" className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-900 transition-colors">
+          <ArrowLeft size={16} /> Back to Tenants
+        </Link>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-6 py-8">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-xl font-semibold text-gray-900">
+            Users {tenant ? `— ${tenant.name}` : ''}
+          </h1>
+          <button
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+          >
+            <Plus size={16} /> Add User
+          </button>
+        </div>
+
+        {showForm && (
+          <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6">
+            <h2 className="font-medium text-gray-900 mb-4">New User</h2>
+            <form
+              onSubmit={(e) => { e.preventDefault(); createMutation.mutate({ tenantId, ...form }); }}
+              className="space-y-4"
+            >
+              {createMutation.error && <p className="text-red-600 text-sm">{createMutation.error.message}</p>}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
+                  <input {...field('first_name')} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
+                  <input {...field('last_name')} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+                <input type="email" required {...field('email')} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Password *</label>
+                <PasswordInput required {...field('password')} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                <select {...field('role')} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="admin">Admin</option>
+                  <option value="teacher">Teacher</option>
+                  <option value="student">Student</option>
+                  <option value="parent">Parent</option>
+                </select>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  type="submit" disabled={createMutation.isPending}
+                  className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                >
+                  {createMutation.isPending ? 'Creating…' : 'Create User'}
+                </button>
+                <button
+                  type="button" onClick={() => setShowForm(false)}
+                  className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {isLoading ? (
+          <p className="text-gray-500 text-sm">Loading…</p>
+        ) : users.length === 0 ? (
+          <div className="text-center py-16 text-gray-400">
+            <Users size={40} className="mx-auto mb-3 opacity-40" />
+            <p className="text-sm">No users yet. Add one above.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {users.map((u) => (
+              <div key={u.id} className="bg-white border border-gray-200 rounded-xl px-6 py-4 flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-gray-900">
+                    {u.first_name || u.last_name ? `${u.first_name} ${u.last_name} · ` : ''}
+                    <span className="text-gray-600 font-normal">{u.email}</span>
+                  </p>
+                  <p className="text-xs text-gray-500 capitalize mt-0.5">{u.role}</p>
+                </div>
+                <button
+                  onClick={() => { if (confirm(`Delete user ${u.email}?`)) deleteMutation.mutate(u.id); }}
+                  className="text-red-400 hover:text-red-600 p-2 transition-colors"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}

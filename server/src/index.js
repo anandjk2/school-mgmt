@@ -4,6 +4,9 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { runMigrations } from './db/migrate.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { requireAuth, requireTenant } from './middleware/auth.js';
+import authRouter      from './routes/auth.js';
+import adminRouter     from './routes/admin.js';
 import studentsRouter    from './routes/students.js';
 import classesRouter     from './routes/classes.js';
 import assignmentsRouter from './routes/assignments.js';
@@ -26,13 +29,22 @@ app.use(cors());
 app.use(express.json());
 
 const BASE = '/api/v1';
-app.use(`${BASE}/students`,    studentsRouter);
-app.use(`${BASE}/classes`,     classesRouter);
-app.use(`${BASE}/assignments`, assignmentsRouter);
-app.use(`${BASE}/attendance`,  attendanceRouter);
-app.use(`${BASE}/fees`,        feesRouter);
-app.use(`${BASE}/dashboard`,   dashboardRouter);
-app.use(`${BASE}/settings`,    settingsRouter);
+
+// Public: login + token refresh
+app.use(`${BASE}/auth`,  authRouter);
+
+// Super-admin only (auth enforced inside router)
+app.use(`${BASE}/admin`, adminRouter);
+
+// All remaining routes require a valid JWT with a tenant context
+const guarded = [requireAuth, requireTenant];
+app.use(`${BASE}/students`,    ...guarded, studentsRouter);
+app.use(`${BASE}/classes`,     ...guarded, classesRouter);
+app.use(`${BASE}/assignments`, ...guarded, assignmentsRouter);
+app.use(`${BASE}/attendance`,  ...guarded, attendanceRouter);
+app.use(`${BASE}/fees`,        ...guarded, feesRouter);
+app.use(`${BASE}/dashboard`,   ...guarded, dashboardRouter);
+app.use(`${BASE}/settings`,    ...guarded, settingsRouter);
 
 // Serve client in production
 const clientDist = join(__dirname, '../../client/dist');
@@ -52,5 +64,3 @@ server.on('error', (err) => {
   console.error('Server error:', err.message);
   process.exit(1);
 });
- 
- 

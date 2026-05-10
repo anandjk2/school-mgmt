@@ -3,13 +3,16 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "nodemon --watch src src/index.js",
-    "start": "node src/index.js"
+    "dev": "nodemon --watch src --exec \"node --env-file=.env\" src/index.js",
+    "start": "node --env-file=.env src/index.js",
+    "seed:superadmin": "node --env-file=.env src/scripts/seed-superadmin.js"
   },
   "dependencies": {
-    "pg": "^8.13.0",
+    "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "express": "^5.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.13.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
