@@ -1,22 +1,20 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiFetch } from '../../api/config.js';
+import { supabase } from '../../lib/supabase.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { Plus, LogOut, Building2, Users } from 'lucide-react';
 
 const fetchTenants = async () => {
-  const r = await apiFetch('/api/v1/admin/tenants');
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message);
-  return j.data;
+  const { data, error } = await supabase.from('tenants').select('*').order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data;
 };
 
-const createTenant = async (data) => {
-  const r = await apiFetch('/api/v1/admin/tenants', { method: 'POST', body: JSON.stringify(data) });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message);
-  return j.data;
+const createTenant = async (body) => {
+  const { data, error } = await supabase.from('tenants').insert(body).select().single();
+  if (error) throw new Error(error.message);
+  return data;
 };
 
 export default function AdminDashboard() {

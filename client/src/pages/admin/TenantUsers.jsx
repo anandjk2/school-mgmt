@@ -1,44 +1,51 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiFetch } from '../../api/config.js';
-import { ArrowLeft, Plus, Trash2, Users } from 'lucide-react';
-import PasswordInput from '../../components/PasswordInput.jsx';
+import { supabase } from '../../lib/supabase.js';
+import { ArrowLeft, Plus, Trash2, Users, Info } from 'lucide-react';
 
 const fetchTenants = async () => {
-  const r = await apiFetch('/api/v1/admin/tenants');
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message);
-  return j.data;
+  const { data, error } = await supabase.from('tenants').select('*');
+  if (error) throw new Error(error.message);
+  return data;
 };
 
 const fetchUsers = async (tenantId) => {
-  const r = await apiFetch(`/api/v1/admin/tenants/${tenantId}/users`);
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message);
-  return j.data;
+  const { data, error } = await supabase
+    .from('users')
+    .select('id, email, role, first_name, last_name, auth_id, created_at')
+    .eq('tenant_id', tenantId)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data;
 };
 
-const createUser = async ({ tenantId, ...data }) => {
-  const r = await apiFetch(`/api/v1/admin/tenants/${tenantId}/users`, { method: 'POST', body: JSON.stringify(data) });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message);
-  return j.data;
+const createUser = async ({ tenantId, email, role, first_name, last_name }) => {
+  const { data, error } = await supabase
+    .from('users')
+    .insert({ tenant_id: tenantId, email, role, first_name, last_name })
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
 };
 
 const deleteUser = async (userId) => {
-  const r = await apiFetch(`/api/v1/admin/users/${userId}`, { method: 'DELETE' });
-  if (!r.ok) { const j = await r.json(); throw new Error(j.error?.message); }
+  const { error } = await supabase.from('users').delete().eq('id', userId);
+  if (error) throw new Error(error.message);
 };
 
-const BLANK = { email: '', password: '', role: 'admin', first_name: '', last_name: '' };
+const BLANK = { email: '', role: 'admin', first_name: '', last_name: '' };
 
 export default function TenantUsers() {
   const { id: tenantId } = useParams();
   const qc = useQueryClient();
   const { data: tenants = [] } = useQuery({ queryKey: ['admin-tenants'], queryFn: fetchTenants });
   const tenant = tenants.find((t) => t.id === tenantId);
-  const { data: users = [], isLoading } = useQuery({ queryKey: ['admin-users', tenantId], queryFn: () => fetchUsers(tenantId) });
+  const { data: users = [], isLoading } = useQuery({
+    queryKey: ['admin-users', tenantId],
+    queryFn: () => fetchUsers(tenantId),
+  });
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(BLANK);
 
@@ -46,7 +53,11 @@ export default function TenantUsers() {
 
   const createMutation = useMutation({
     mutationFn: createUser,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-users', tenantId] }); setShowForm(false); setForm(BLANK); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-users', tenantId] });
+      setShowForm(false);
+      setForm(BLANK);
+    },
   });
 
   const deleteMutation = useMutation({
@@ -77,7 +88,14 @@ export default function TenantUsers() {
 
         {showForm && (
           <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6">
-            <h2 className="font-medium text-gray-900 mb-4">New User</h2>
+            <h2 className="font-medium text-gray-900 mb-2">New User</h2>
+            <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-4 text-sm text-blue-700">
+              <Info size={15} className="flex-shrink-0 mt-0.5" />
+              <span>
+                This creates the user profile. To activate their login, run the migration script:<br />
+                <code className="font-mono text-xs">node server/src/scripts/migrate-to-supabase-auth.js &lt;service_role_key&gt;</code>
+              </span>
+            </div>
             <form
               onSubmit={(e) => { e.preventDefault(); createMutation.mutate({ tenantId, ...form }); }}
               className="space-y-4"
@@ -96,10 +114,6 @@ export default function TenantUsers() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
                 <input type="email" required {...field('email')} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Password *</label>
-                <PasswordInput required {...field('password')} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
@@ -144,7 +158,9 @@ export default function TenantUsers() {
                     {u.first_name || u.last_name ? `${u.first_name} ${u.last_name} · ` : ''}
                     <span className="text-gray-600 font-normal">{u.email}</span>
                   </p>
-                  <p className="text-xs text-gray-500 capitalize mt-0.5">{u.role}</p>
+                  <p className="text-xs text-gray-500 capitalize mt-0.5">
+                    {u.role} · {u.auth_id ? '✓ login active' : '⚠ no login yet'}
+                  </p>
                 </div>
                 <button
                   onClick={() => { if (confirm(`Delete user ${u.email}?`)) deleteMutation.mutate(u.id); }}
