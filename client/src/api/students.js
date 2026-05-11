@@ -1,52 +1,57 @@
-import API_BASE, { apiFetch } from './config.js';
-const BASE = `${API_BASE}/api/v1/students`;
+import { supabase } from '../lib/supabase.js';
 
 export const fetchStudents = async (params = {}) => {
-  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v));
-  const r = await apiFetch(`${BASE}?${q}`);
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Failed to fetch students');
-  return j;
+  let q = supabase.from('students').select('*', { count: 'exact' });
+  if (params.search) q = q.or(`first_name.ilike.%${params.search}%,last_name.ilike.%${params.search}%`);
+  if (params.status) q = q.eq('status', params.status);
+  q = q.order('last_name').order('first_name');
+  const { data, error, count } = await q;
+  if (error) throw new Error(error.message);
+  return { data, total: count };
 };
 
 export const fetchStudent = async (id) => {
-  const r = await apiFetch(`${BASE}/${id}`);
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Student not found');
-  return j.data;
+  const { data, error } = await supabase.from('students').select('*').eq('id', id).single();
+  if (error) throw new Error(error.message);
+  return data;
 };
 
-export const createStudent = async (data) => {
-  const r = await apiFetch(BASE, { method: 'POST', body: JSON.stringify(data) });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Failed to create student');
-  return j.data;
+export const createStudent = async (body) => {
+  const { data, error } = await supabase.from('students').insert(body).select().single();
+  if (error) throw new Error(error.message);
+  return data;
 };
 
-export const updateStudent = async (id, data) => {
-  const r = await apiFetch(`${BASE}/${id}`, { method: 'PUT', body: JSON.stringify(data) });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Failed to update student');
-  return j.data;
+export const updateStudent = async (id, body) => {
+  const { data, error } = await supabase
+    .from('students')
+    .update({ ...body, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
 };
 
 export const deleteStudent = async (id) => {
-  const r = await apiFetch(`${BASE}/${id}`, { method: 'DELETE' });
-  if (!r.ok) { const j = await r.json(); throw new Error(j.error?.message || 'Failed to delete student'); }
+  const { error } = await supabase.from('students').delete().eq('id', id);
+  if (error) throw new Error(error.message);
 };
 
 export const fetchStudentFees = async (id, params = {}) => {
-  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v));
-  const r = await apiFetch(`${BASE}/${id}/fees?${q}`);
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Failed to fetch fees');
-  return j.data;
+  let q = supabase.from('fees').select('*, classes(name)').eq('student_id', id);
+  if (params.status) q = q.eq('status', params.status);
+  const { data, error } = await q.order('due_date', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data;
 };
 
 export const fetchStudentAttendance = async (id, params = {}) => {
-  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v));
-  const r = await apiFetch(`${BASE}/${id}/attendance?${q}`);
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Failed to fetch attendance');
-  return j.data;
+  let q = supabase.from('attendance').select('*, classes(name)').eq('student_id', id);
+  if (params.class_id) q = q.eq('class_id', params.class_id);
+  if (params.from) q = q.gte('date', params.from);
+  if (params.to) q = q.lte('date', params.to);
+  const { data, error } = await q.order('date', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data;
 };

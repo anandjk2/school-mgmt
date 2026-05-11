@@ -1,8 +1,17 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { login as apiLogin, getMe } from '../api/auth.js';
+import { supabase } from '../lib/supabase.js';
 
 const AuthContext = createContext(null);
+
+async function loadProfile(userId) {
+  const { data } = await supabase
+    .from('users')
+    .select('*, tenants(name)')
+    .eq('auth_id', userId)
+    .single();
+  return data;
+}
 
 export function AuthProvider({ children }) {
   const [auth, setAuth] = useState(null);
@@ -10,25 +19,46 @@ export function AuthProvider({ children }) {
   const qc = useQueryClient();
 
   useEffect(() => {
-    const token = localStorage.getItem('auth_token');
-    if (!token) { setLoading(false); return; }
-    getMe()
-      .then(({ data }) => {
-        setAuth({ token, user: data, tenantId: data.tenant_id, tenantName: data.tenantName });
-      })
-      .catch(() => localStorage.removeItem('auth_token'))
-      .finally(() => setLoading(false));
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session) {
+        const profile = await loadProfile(session.user.id);
+        if (profile) {
+          setAuth({
+            user: profile,
+            tenantId: profile.tenant_id,
+            tenantName: profile.tenants?.name,
+          });
+        }
+      }
+      setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event) => {
+      if (event === 'SIGNED_OUT') {
+        qc.clear();
+        setAuth(null);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const login = async (email, password) => {
-    const data = await apiLogin(email, password);
-    localStorage.setItem('auth_token', data.token);
-    setAuth({ token: data.token, user: data.user, tenantId: data.tenantId, tenantName: data.tenantName });
-    return data;
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw new Error(error.message);
+    const profile = await loadProfile(data.user.id);
+    if (!profile) throw new Error('User profile not found. Contact your administrator.');
+    const authState = {
+      user: profile,
+      tenantId: profile.tenant_id,
+      tenantName: profile.tenants?.name,
+    };
+    setAuth(authState);
+    return { user: profile };
   };
 
-  const logout = () => {
-    localStorage.removeItem('auth_token');
+  const logout = async () => {
+    await supabase.auth.signOut();
     qc.clear();
     setAuth(null);
   };

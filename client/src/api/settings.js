@@ -1,16 +1,23 @@
-import API_BASE, { apiFetch } from './config.js';
-const BASE = `${API_BASE}/api/v1/settings`;
+import { supabase } from '../lib/supabase.js';
 
 export const fetchSettings = async () => {
-  const r = await apiFetch(BASE);
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Failed to fetch settings');
-  return j.data;
+  const { data, error } = await supabase.from('settings').select('key, value');
+  if (error) throw new Error(error.message);
+  return Object.fromEntries(data.map(r => [r.key, r.value]));
 };
 
-export const updateSettings = async (data) => {
-  const r = await apiFetch(BASE, { method: 'PUT', body: JSON.stringify(data) });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Failed to save settings');
-  return j.data;
+export const updateSettings = async (settings) => {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { data: profile } = await supabase
+    .from('users').select('tenant_id').eq('auth_id', user.id).single();
+
+  const rows = Object.entries(settings).map(([key, value]) => ({
+    tenant_id: profile.tenant_id,
+    key,
+    value: String(value),
+  }));
+
+  const { error } = await supabase.from('settings').upsert(rows, { onConflict: 'tenant_id,key' });
+  if (error) throw new Error(error.message);
+  return settings;
 };

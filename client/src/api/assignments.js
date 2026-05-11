@@ -1,35 +1,40 @@
-import API_BASE, { apiFetch } from './config.js';
-const BASE = `${API_BASE}/api/v1/assignments`;
+import { supabase } from '../lib/supabase.js';
 
-export const createAssignment = async (data) => {
-  const r = await apiFetch(BASE, { method: 'POST', body: JSON.stringify(data) });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Failed to assign student');
-  return j.data;
+export const createAssignment = async (body) => {
+  const { data, error } = await supabase.from('student_classes').insert(body).select().single();
+  if (error) throw new Error(error.message);
+  return data;
 };
 
 export const bulkAssign = async (assignments) => {
-  const r = await apiFetch(`${BASE}/bulk`, { method: 'POST', body: JSON.stringify({ assignments }) });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Failed to bulk assign');
-  return j.data;
+  const { data, error } = await supabase.from('student_classes').insert(assignments).select();
+  if (error) throw new Error(error.message);
+  return data;
 };
 
 export const disenrollAssignment = async (id) => {
-  const r = await apiFetch(`${BASE}/${id}/disenroll`, { method: 'PUT' });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Failed to disenroll');
-  return j.data;
+  const { data, error } = await supabase
+    .from('student_classes')
+    .update({ disenrolled_on: new Date().toISOString().split('T')[0] })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
 };
 
 export const reenrollAssignment = async (id) => {
-  const r = await apiFetch(`${BASE}/${id}/reenroll`, { method: 'PUT' });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Failed to re-enroll');
-  return j.data;
+  const { data, error } = await supabase
+    .from('student_classes')
+    .update({ disenrolled_on: null })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
 };
 
 export const deleteAssignment = async (id) => {
-  const r = await apiFetch(`${BASE}/${id}`, { method: 'DELETE' });
-  if (!r.ok) { const j = await r.json(); throw new Error(j.error?.message || 'Failed to remove assignment'); }
+  const { error } = await supabase.from('student_classes').delete().eq('id', id);
+  if (error) throw new Error(error.message);
 };
